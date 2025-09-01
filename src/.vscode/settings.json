@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "pushswap.h": "c",
+        "errno.h": "c",
+        "minishell.h": "c"
+    }
+}
