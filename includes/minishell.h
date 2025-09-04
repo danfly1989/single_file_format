@@ -45,6 +45,7 @@ typedef struct s_dat
 	char **avs;                 // args for external function executions
 	char **evs;                 // envs for external function executions
 	int						last_exit_status;
+	int						status;
 	int						*qtypes;
 }							t_dat;
 
@@ -54,13 +55,14 @@ typedef struct s_variable_node
 	char					*value;
 	struct s_variable_node	*next;
 }							t_va;
-
 typedef struct s_redirections
 {
-	char					*in_file;
-	char					*out_file;
-	char					*append_file;
-	char					*heredoc_delim;
+	int						redirect_in;
+	int						redirect_out;
+	int						heredoc;
+	int						append;
+	char					*file_in;
+	char					*file_out;
 }							t_rdr;
 
 void						ft_free_string_array(char **str_array);
@@ -181,13 +183,13 @@ void						ft_fork_children(t_dat *d, char ***cmd, int **fd);
 void						ft_close_pipes(int **fd, int tot);
 void						ft_wait_children(t_dat *d, int tot);
 void						ft_execute_pipeline(t_dat *d, char ***cmd);
-int							ft_parse_redirection(char **tokens, t_rdr *r);
-int							ft_redir_in(char *file);
-int							ft_redir_out(char *file);
-int							ft_redir_append(char *file);
+void						ft_parse_redirection(char **tokens, t_rdr *r);
+// int							ft_redir_in(char *file);
+// int							ft_redir_out(char *file);
+// int							ft_redir_append(char *file);
 // int		ft_handle_heredoc(char *delim, char *line);
-int							ft_apply_sing_redirections(t_rdr *r, char **tok);
-int							ft_apply_redirections(t_rdr *r, char ***cmd);
+// int							ft_apply_sing_redirections(t_rdr *r,char **tok);
+// int							ft_apply_redirections(t_rdr *r, char ***cmd);
 int							ft_remove_redirections(char ***tokens_ptr, int i,
 								int j);
 int							ft_remove_sing_redirections(char **t, int i, int j);
@@ -227,16 +229,32 @@ int							ft_heredoc_parent(int *pipefd, pid_t pid,
 void						ft_heredoc_child(char *delim, char *line,
 								int *pipefd);
 int							ft_handle_heredoc(char *delim, char *line);
-void						ft_ex_single_cmd(t_dat *d, char *cmd_path);
+// void						ft_ex_single_cmd(t_dat *d, char *cmd_path);
 int							ft_ex_single_cmd_setup(t_dat *d, t_rdr *r,
 								int *saved_stdin);
 void						ft_ex_single_cmd_parent(t_dat *d, pid_t pid,
 								int saved_stdin);
-void						ft_ex_single_cmd_child(t_dat *d, char *cmd_path,
-								int saved_stdin);
+void						ft_ex_single_cmd_child(t_dat *d, char **cmd_args,
+								char *cmd_path);
 void						ft_nullify_pointers(t_dat *data);
 void						ft_free_lines(t_dat *data);
 void						ft_check_var_assign_and_expand_line_ext(t_dat *data,
 								char *line);
 void						ft_cmd_error(t_dat *data, char *line);
+/// @brief ///
+/// @param tokens
+void						ft_remove_redirection_tokens(char **tokens);
+int							ft_redir_in(const char *file);
+int							ft_redir_out(const char *file);
+int							ft_redir_append(const char *file);
+int							ft_apply_sing_redirections(t_rdr *r);
+int							ft_apply_redirections(t_rdr *r);
+void						ft_execute_builtin_with_redir(t_dat *d, t_rdr *r,
+								size_t builtin_idx);
+void						ft_ex_single_cmd(t_dat *d, char *cmd_path);
+void						ft_child_pipe(t_dat *d, char **cmd, int **fd,
+								size_t k);
+char						**ft_get_clean_args(char **xln);
+void						ft_child_exec(t_dat *d, char **cmd);
+void						ft_free_args(char **args);
 #endif

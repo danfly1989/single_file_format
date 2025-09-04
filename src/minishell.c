@@ -1,13 +1,13 @@
 /* ************************************************************************** */
-/*                                                                            */
-/*                                                        :::      ::::::::   */
-/*   minishell.c                                        :+:      :+:    :+:   */
-/*                                                    +:+ +:+         +:+     */
-/*   By: dagwu <dagwu@student.42berlin.de>          +#+  +:+       +#+        */
-/*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2025/06/14 18:44:41 by dagwu             #+#    #+#             */
-/*   Updated: 2025/06/14 18:44:46 by dagwu            ###   ########.fr       */
-/*                                                                            */
+/* */
+/* :::      ::::::::   */
+/* minishell.c                                        :+:      :+:    :+:   */
+/* +:+ +:+         +:+     */
+/* By: dagwu <dagwu@student.42berlin.de>          +#+  +:+       +#+        */
+/* +#+#+#+#+#+   +#+           */
+/* Created: 2025/06/14 18:44:41 by dagwu             #+#    #+#             */
+/* Updated: 2025/06/14 18:44:46 by dagwu            ###   ########.fr       */
+/* */
 /* ************************************************************************** */
 
 #include "minishell.h"
@@ -1558,18 +1558,139 @@ void	ft_get_exit_stat(t_dat *d, pid_t pid)
 		d->last_exit_status = WEXITSTATUS(status);
 }
 
-void	ft_ex_single_cmd_child(t_dat *d, char *cmd_path, int saved_stdin)
+void	ft_ex_single_cmd(t_dat *d, char *cmd_path)
 {
-	close(saved_stdin);
-	cmd_path = ft_get_cmd_path(d, d->xln[0], 0);
-	if (!cmd_path)
+	t_rdr	r;
+	char	**cmd_args;
+	pid_t	pid;
+	int		saved_stdin;
+	int		saved_stdout;
+
+	(void)cmd_path;
+	// 1. Save the original stdin and stdout (so we can restore later)
+	saved_stdin = dup(STDIN_FILENO);
+	saved_stdout = dup(STDOUT_FILENO);
+	if (saved_stdin < 0 || saved_stdout < 0)
 	{
-		ft_cmd_not_found(d->xln[0]);
-		exit(1);
+		perror("dup");
+		if (saved_stdin >= 0)
+			close(saved_stdin);
+		if (saved_stdout >= 0)
+			close(saved_stdout);
+		return ;
 	}
-	execve(cmd_path, d->xln, d->evs);
-	exit(1);
+	// 2. Parse redirections from the token array into t_rdr
+	ft_parse_redirection(d->xln, &r);
+	// 3. Apply redirections; stop if any fail
+	if (!ft_apply_sing_redirections(&r))
+	{
+		close(saved_stdin);
+		close(saved_stdout);
+		return ;
+	}
+	// 4. Prepare command arguments (without redirection tokens)
+	cmd_args = ft_get_clean_args(d->xln);
+	if (!cmd_args)
+	{
+		dup2(saved_stdin, STDIN_FILENO);
+		dup2(saved_stdout, STDOUT_FILENO);
+		close(saved_stdin);
+		close(saved_stdout);
+		return ;
+	}
+	// 5. Check if it's a builtin that should execute in parent
+	if (ft_handle_builtin(d, 0))
+	{
+		// Execute builtin with redirection already applied
+		ft_handle_builtin(d, 0);
+		// Restore stdio
+		dup2(saved_stdin, STDIN_FILENO);
+		dup2(saved_stdout, STDOUT_FILENO);
+		close(saved_stdin);
+		close(saved_stdout);
+		ft_free_args(cmd_args);
+		return ;
+	}
+	// 6. Fork for external commands
+	pid = fork();
+	if (pid < 0)
+	{
+		perror("fork");
+		ft_free_args(cmd_args);
+		dup2(saved_stdin, STDIN_FILENO);
+		dup2(saved_stdout, STDOUT_FILENO);
+		close(saved_stdin);
+		close(saved_stdout);
+		return ;
+	}
+	else if (pid == 0)
+	{
+		// Child process: execute command
+		ft_child_exec(d, cmd_args);
+		exit(EXIT_FAILURE); // exec failed
+	}
+	else
+	{
+		// Parent process: wait for child
+		waitpid(pid, &d->status, 0);
+		// Restore stdio
+		dup2(saved_stdin, STDIN_FILENO);
+		dup2(saved_stdout, STDOUT_FILENO);
+		close(saved_stdin);
+		close(saved_stdout);
+	}
+	// 7. Free allocated command arguments
+	ft_free_args(cmd_args);
 }
+
+// // Rewritten to correctly handle and apply redirections
+// void	ft_ex_single_cmd(t_dat *d)
+// {
+// 	t_rdr	r;
+// 	char	**cmd_args;
+// 	pid_t	pid;
+// 	int		saved_stdin;
+
+// 	// Save the original stdin (in case of input redirection)
+// 	saved_stdin = dup(STDIN_FILENO);
+// 	if (saved_stdin < 0)
+// 		perror("dup");
+// 	// Parse redirections from the token array into t_rdr
+// 	ft_parse_redirection(d->xln, &r);
+// 	// Apply redirections; stop if failed
+// 	if (!ft_apply_sing_redirections(&r))
+// 	{
+// 		close(saved_stdin);
+// 		return ;
+// 	}
+// 	// Prepare command arguments without redirection tokens
+// 	cmd_args = ft_get_clean_args(d->xln);
+// 	if (!cmd_args)
+// 	{
+// 		dup2(saved_stdin, STDIN_FILENO);
+// 		close(saved_stdin);
+// 		return ;
+// 	}
+// 	// Fork the child process
+// 	pid = fork();
+// 	if (pid < 0)
+// 		perror("fork");
+// 	else if (pid == 0)
+// 	{
+// 		// In child: execute command or builtin
+// 		ft_child_exec(d, cmd_args);
+// 		exit(EXIT_FAILURE); // in case exec fails
+// 	}
+// 	else
+// 	{
+// 		// In parent: wait for child and restore stdin
+// 		waitpid(pid, &d->status, 0);
+// 		dup2(saved_stdin, STDIN_FILENO);
+// 		close(saved_stdin);
+// 	}
+// 	// Free command args if dynamically allocated
+// 	ft_free_args(cmd_args);
+// }
 
 void	ft_ex_single_cmd_parent(t_dat *d, pid_t pid, int saved_stdin)
 {
@@ -1579,42 +1700,38 @@ void	ft_ex_single_cmd_parent(t_dat *d, pid_t pid, int saved_stdin)
 	close(saved_stdin);
 }
 
-int	ft_ex_single_cmd_setup(t_dat *d, t_rdr *r, int *saved_stdin)
+// Helper to get a clean argument array without redirection tokens
+char	**ft_get_clean_args(char **xln)
 {
-	*saved_stdin = dup(STDIN_FILENO);
-	if (*saved_stdin < 0)
-	{
-		perror("dup");
-		return (0);
-	}
-	ft_set_no_pipe_child_signals(d);
-	ft_parse_redirection(d->xln, r);
-	if (!ft_apply_sing_redirections(r, d->xln))
-	{
-		close(*saved_stdin);
-		return (0);
-	}
-	return (1);
-}
+	char	**clean_args;
+	int		i;
+	int		j;
+	int		count;
 
-void	ft_ex_single_cmd(t_dat *d, char *cmd_path)
-{
-	t_rdr	r;
-	pid_t	pid;
-	int		saved_stdin;
-
-	if (ft_handle_builtin(d, d->st))
-		return ;
-	if (!ft_ex_single_cmd_setup(d, &r, &saved_stdin))
-		return ;
-	pid = fork();
-	if (pid == 0)
-		ft_ex_single_cmd_child(d, cmd_path, saved_stdin);
-	else if (pid > 0)
-		ft_ex_single_cmd_parent(d, pid, saved_stdin);
-	else
-		perror("fork");
-	ft_set_main_signals();
+	count = 0;
+	i = 0;
+	while (xln[i])
+	{
+		if (ft_strcmp(xln[i], ">") != 0 && ft_strcmp(xln[i], "<") != 0
+			&& ft_strcmp(xln[i], ">>") != 0)
+			count++;
+		i++;
+	}
+	clean_args = malloc(sizeof(char *) * (count + 1));
+	if (!clean_args)
+		return (NULL);
+	i = 0;
+	j = 0;
+	while (xln[i])
+	{
+		if (ft_strcmp(xln[i], ">") == 0 || ft_strcmp(xln[i], "<") == 0
+			|| ft_strcmp(xln[i], ">>") == 0)
+			i += 2; // Skip redirection token and filename
+		else
+			clean_args[j++] = ft_strdup(xln[i++]);
+	}
+	clean_args[j] = NULL;
+	return (clean_args);
 }
 
 void	ft_cmd_error(t_dat *data, char *line)
@@ -1759,575 +1876,381 @@ int	**init_fd_array(int tot)
 	if (!fd)
 		return (NULL);
 	i = 0;
-	while (i < tot - 1)
+	while (i < tot)
 	{
-		fd[i] = malloc(sizeof(int) * 2);
+		fd[i] = malloc(2 * sizeof(int));
 		if (!fd[i])
 		{
-			while (--i >= 0)
-				free(fd[i]);
-			free(fd);
+			ft_free_fd(fd);
 			return (NULL);
 		}
 		i++;
 	}
-	fd[tot - 1] = NULL;
+	fd[i] = NULL;
 	return (fd);
 }
 
-int	ft_create_pipes(int **fd, int tot)
+void	ft_close_fds(int **fd, int k, int tot)
 {
-	int	i;
-
-	i = 0;
-	while (i < tot - 1)
-	{
-		if (pipe(fd[i]) == -1)
-		{
-			perror("pipe");
-			while (i-- > 0)
-				free(fd[i]);
-			free(fd);
-			return (0);
-		}
-		i++;
-	}
-	return (1);
-}
-
-void	ft_setup_io(int **fd, size_t i, size_t total)
-{
-	if (i > 0)
-		dup2(fd[i - 1][0], STDIN_FILENO);
-	if (i < total - 1)
-		dup2(fd[i][1], STDOUT_FILENO);
-}
-
-int	ft_is_builtin(char *cmd)
-{
-	if (!ft_strcmp(cmd, "pwd"))
-		return (1);
-	if (!ft_strcmp(cmd, "cd"))
-		return (1);
-	if (!ft_strcmp(cmd, "echo"))
-		return (1);
-	if (!ft_strcmp(cmd, "exit"))
-		return (1);
-	if (!ft_strcmp(cmd, "export"))
-		return (1);
-	if (!ft_strcmp(cmd, "unset"))
-		return (1);
-	if (!ft_strcmp(cmd, "env"))
-		return (1);
-	return (0);
-}
-
-void	ft_execute_builtin_in_child(t_dat *d, char **cmd)
-{
-	if (!ft_strcmp(cmd[0], "pwd"))
-		ft_pwd();
-	else if (!ft_strcmp(cmd[0], "cd"))
-		ft_change_directory(d, 0);
-	else if (!ft_strcmp(cmd[0], "echo"))
-		ft_echo(cmd, 0);
-	else if (!ft_strcmp(cmd[0], "exit"))
-		ft_exit(d, 0);
-	else if (!ft_strcmp(cmd[0], "env"))
-		ft_env(d);
-	else if (!ft_strcmp(cmd[0], "unset"))
-		ft_unset_multi_var(d, 0);
-	else if (!ft_strcmp(cmd[0], "export"))
-		ft_export_multi_var(d, 0);
-}
-
-void	ft_exec_command(t_dat *d, char **cmd)
-{
-	char	*cmd_path;
-
-	if (!cmd || !cmd[0])
-		exit(127);
-	if (ft_is_builtin(cmd[0]))
-	{
-		ft_execute_builtin_in_child(d, cmd);
-		exit(d->last_exit_status);
-	}
-	cmd_path = ft_get_cmd_path(d, cmd[0], 0);
-	if (!cmd_path)
-	{
-		ft_putstr_fd("minishell: ", 2);
-		ft_putstr_fd(cmd[0], 2);
-		ft_putendl_fd(": command not found", 2);
-		exit(127);
-	}
-	execve(cmd_path, cmd, d->evs);
-	free(cmd_path);
-	perror("execve");
-	exit(1);
-}
-
-void	ft_child_process(t_dat *d, char ***cmd, int **fd, size_t i)
-{
-	t_rdr	r;
-	int		len;
-
-	if (!cmd || !cmd[i] || !cmd[i][0])
-	{
-		ft_cleanup_data(d);
-		exit(1);
-	}
-	len = 0;
-	while (cmd[i][len])
-		len++;
-	ft_memset(&r, 0, sizeof(r));
-	if (!ft_validate_segment(cmd[i], 0, len))
-		exit(1);
-	ft_setup_io(fd, i, d->tot);
-	ft_close_pipes(fd, d->tot);
-	ft_parse_redirection(cmd[i], &r);
-	if (!ft_apply_redirections(&r, &cmd[i]))
-	{
-		ft_free_redirection(&r);
-		ft_cleanup_data(d);
-		exit(1);
-	}
-	ft_exec_command(d, cmd[i]);
-}
-
-int	ft_syntax_error_msg(char *token)
-{
-	char	*prefix;
-	char	*newline;
-
-	prefix = "minishell: syntax error near unexpected token `";
-	newline = "'\n";
-	if (token)
-	{
-		write(2, prefix, ft_strlen(prefix));
-		write(2, token, ft_strlen(token));
-		write(2, newline, 2);
-	}
-	else
-	{
-		write(2, prefix, ft_strlen(prefix));
-		write(2, "newline", 7);
-		write(2, newline, 2);
-	}
-	return (0);
-}
-
-int	ft_validate_segment(char **tokens, int start, int end)
-{
-	int	i;
-
-	if (!tokens || start >= end)
-		return (0);
-	i = start;
-	while (i < end)
-	{
-		if (ft_is_redirection(tokens[i]))
-		{
-			if (i + 1 >= end || ft_is_redirection(tokens[i + 1])
-				|| !ft_strcmp(tokens[i + 1], "|"))
-			{
-				return (ft_syntax_error_msg(tokens[i + 1]));
-			}
-		}
-		i++;
-	}
-	return (1);
-}
-
-void	ft_fork_children(t_dat *d, char ***cmd, int **fd)
-{
-	pid_t	pid;
-	size_t	i;
-
-	i = 0;
-	while (i < d->tot)
-	{
-		if (!cmd[i] || !cmd[i][0])
-		{
-			i++;
-			continue ;
-		}
-		pid = fork();
-		if (pid == 0)
-			ft_child_process(d, cmd, fd, i);
-		else if (pid < 0)
-			perror("fork");
-		i++;
-	}
-}
-
-void	ft_close_pipes(int **fd, int tot)
-{
-	int	i;
-
-	i = 0;
-	while (i < tot - 1)
-	{
-		close(fd[i][0]);
-		close(fd[i][1]);
-		i++;
-	}
-}
-
-void	ft_wait_children(t_dat *d, int tot)
-{
-	int	status;
 	int	i;
 
 	i = 0;
 	while (i < tot)
 	{
-		wait(&status);
-		if (WIFEXITED(status))
-			d->last_exit_status = WEXITSTATUS(status);
+		if (i != k - 1)
+			close(fd[i][0]);
+		if (i != k)
+			close(fd[i][1]);
 		i++;
 	}
+}
+
+int	ft_is_builtin_in_pipe(char *cmd)
+{
+	if (!cmd)
+		return (0);
+	if (ft_strcmp(cmd, "echo") == 0)
+		return (1);
+	if (ft_strcmp(cmd, "pwd") == 0)
+		return (1);
+	if (ft_strcmp(cmd, "cd") == 0)
+		return (1);
+	if (ft_strcmp(cmd, "env") == 0)
+		return (1);
+	if (ft_strcmp(cmd, "export") == 0)
+		return (1);
+	if (ft_strcmp(cmd, "unset") == 0)
+		return (1);
+	if (ft_strcmp(cmd, "exit") == 0)
+		return (1);
+	return (0);
+}
+
+void	ft_builtin_in_pipe(t_dat *d, char **cmd, int i)
+{
+	if (ft_strcmp(cmd[i], "echo") == 0)
+		ft_echo(cmd, i);
+	if (ft_strcmp(cmd[i], "pwd") == 0)
+		ft_pwd();
+	if (ft_strcmp(cmd[i], "cd") == 0)
+		ft_change_directory(d, i);
+	if (ft_strcmp(cmd[i], "env") == 0)
+		ft_env(d);
+	if (ft_strcmp(cmd[i], "export") == 0)
+		ft_export_multi_var(d, i);
+	if (ft_strcmp(cmd[i], "unset") == 0)
+		ft_unset_multi_var(d, i);
+	if (ft_strcmp(cmd[i], "exit") == 0)
+		ft_exit(d, i);
+	ft_cleanup_data(d);
+	exit(0);
+}
+
+void	ft_child_pipe(t_dat *d, char **cmd, int **fd, size_t k)
+{
+	char	*path;
+
+	ft_set_child_signals();
+	if (k > 0)
+	{
+		if (dup2(fd[k - 1][0], STDIN_FILENO) == -1)
+			perror("dup2");
+	}
+	if (k < d->tot - 1)
+	{
+		if (dup2(fd[k][1], STDOUT_FILENO) == -1)
+			perror("dup2");
+	}
+	ft_close_fds(fd, k, d->tot - 1);
+	if (ft_is_builtin_in_pipe(cmd[0]))
+		ft_builtin_in_pipe(d, cmd, 0);
+	path = ft_get_cmd_path(d, cmd[0], 0);
+	if (!path)
+	{
+		ft_cmd_not_found(cmd[0]);
+		exit(127);
+	}
+	execve(path, cmd, d->evs);
+	perror("execve");
+	exit(1);
+}
+
+void	ft_parent_pipe(t_dat *d, pid_t *pids, int **fd, int tot)
+{
+	int	i;
+
+	(void)d;
+	ft_close_fds(fd, -1, tot - 1);
+	i = 0;
+	while (i < tot)
+	{
+		waitpid(pids[i], NULL, 0);
+		i++;
+	}
+	ft_free_fd(fd);
+	free(pids);
 }
 
 void	ft_execute_pipeline(t_dat *d, char ***cmd)
 {
-	int	**fd;
+	int		**fd;
+	pid_t	*pids;
+	size_t	k;
 
-	ft_set_child_signals();
-	fd = init_fd_array(d->tot);
-	if (!fd || !ft_create_pipes(fd, d->tot))
+	fd = init_fd_array(d->tot - 1);
+	pids = malloc(d->tot * sizeof(pid_t));
+	if (!fd || !pids)
 	{
-		if (fd)
-			ft_free_fd(fd);
+		ft_free_fd(fd);
+		free(pids);
 		return ;
 	}
-	ft_fork_children(d, cmd, fd);
-	ft_close_pipes(fd, d->tot);
-	ft_wait_children(d, d->tot);
-	ft_set_main_signals();
-	ft_free_fd(fd);
-}
-
-int	ft_parse_redirection(char **tokens, t_rdr *r)
-{
-	int	i;
-
-	i = 0;
-	ft_memset(r, 0, sizeof(*r));
-	while (tokens[i])
+	k = 0;
+	while (k < d->tot - 1)
 	{
-		if (!ft_strcmp(tokens[i], "<") && tokens[i + 1])
-			r->in_file = ft_strdup(tokens[++i]);
-		else if (!ft_strcmp(tokens[i], ">") && tokens[i + 1])
-			r->out_file = ft_strdup(tokens[++i]);
-		else if (!ft_strcmp(tokens[i], ">>") && tokens[i + 1])
-			r->append_file = ft_strdup(tokens[++i]);
-		else if (!ft_strcmp(tokens[i], "<<") && tokens[i + 1])
-			r->heredoc_delim = ft_strdup(tokens[++i]);
-		i++;
+		if (pipe(fd[k]) == -1)
+			perror("pipe");
+		k++;
 	}
-	return (1);
-}
-
-int	ft_redir_in(char *file)
-{
-	int	fd;
-
-	fd = open(file, O_RDONLY);
-	if (fd < 0)
-		return (perror(file), 0);
-	if (dup2(fd, STDIN_FILENO) < 0)
-		return (perror("dup2 in"), 0);
-	close(fd);
-	return (1);
-}
-
-int	ft_redir_out(char *file)
-{
-	int	fd;
-
-	fd = open(file, O_CREAT | O_WRONLY | O_TRUNC, 0644);
-	if (fd < 0)
-		return (perror(file), 0);
-	if (dup2(fd, STDOUT_FILENO) < 0)
-		return (perror("dup2 out"), 0);
-	close(fd);
-	return (1);
-}
-
-int	ft_redir_append(char *file)
-{
-	int	fd;
-
-	fd = open(file, O_CREAT | O_WRONLY | O_APPEND, 0644);
-	if (fd < 0)
-		return (perror(file), 0);
-	if (dup2(fd, STDOUT_FILENO) < 0)
-		return (perror("dup2 append"), 0);
-	close(fd);
-	return (1);
-}
-
-void	ft_heredoc_child(char *delim, char *line, int *pipefd)
-{
-	ft_set_heredoc_signals();
-	close(pipefd[0]);
-	while (1)
+	k = 0;
+	while (k < d->tot)
 	{
-		line = readline("> ");
-		if (!line)
-			break ;
-		//		if (ft_strncmp(line, delim, strlen(delim)) == 0
-		//			&& line[strlen(delim)] == '\0')
-		if (ft_strcmp(line, delim) == 0)
-		{
-			free(line);
-			break ;
-		}
-		write(pipefd[1], line, strlen(line));
-		write(pipefd[1], "\n", 1);
-		free(line);
+		pids[k] = fork();
+		if (pids[k] == 0)
+			ft_child_pipe(d, cmd[k], fd, k);
+		k++;
 	}
-	close(pipefd[1]);
-	exit(0);
-}
-
-int	ft_heredoc_parent(int *pipefd, pid_t pid, int saved_stdin)
-{
-	int	status;
-
-	//	int	saved_stdin;
-	saved_stdin = dup(STDIN_FILENO);
-	close(pipefd[1]);
-	waitpid(pid, &status, 0);
-	ft_set_main_signals();
-	if (WIFSIGNALED(status) && WTERMSIG(status) == SIGINT)
-	{
-		close(pipefd[0]);
-		dup2(saved_stdin, STDIN_FILENO);
-		close(saved_stdin);
-		return (0);
-	}
-	if (WIFEXITED(status) && WEXITSTATUS(status) != 0)
-	{
-		close(pipefd[0]);
-		dup2(saved_stdin, STDIN_FILENO);
-		close(saved_stdin);
-		return (0);
-	}
-	dup2(pipefd[0], STDIN_FILENO);
-	close(pipefd[0]);
-	close(saved_stdin);
-	return (1);
-}
-
-int	ft_handle_heredoc(char *delim, char *line)
-{
-	int		pipefd[2];
-	pid_t	pid;
-	int		saved_stdin;
-
-	saved_stdin = dup(STDIN_FILENO);
-	if (pipe(pipefd) == -1)
-	{
-		perror("pipe");
-		close(saved_stdin);
-		return (0);
-	}
-	pid = fork();
-	if (pid < 0)
-	{
-		perror("fork");
-		close(saved_stdin);
-		return (0);
-	}
-	if (pid == 0)
-		ft_heredoc_child(delim, line, pipefd);
-	return (ft_heredoc_parent(pipefd, pid, saved_stdin));
-}
-
-int	ft_apply_sing_redirections(t_rdr *r, char **tok)
-{
-	int	result;
-
-	result = 1;
-	if (r->in_file && !ft_redir_in(r->in_file))
-		result = 0;
-	if (r->out_file && !ft_redir_out(r->out_file))
-		result = 0;
-	if (r->append_file && !ft_redir_append(r->append_file))
-		result = 0;
-	if (r->heredoc_delim && !ft_handle_heredoc(r->heredoc_delim, NULL))
-		result = 0;
-	ft_free_redirection(r);
-	if (result)
-		return (ft_remove_sing_redirections(tok, 0, 0));
-	else
-		return (0);
-}
-
-int	ft_apply_redirections(t_rdr *r, char ***cmd)
-{
-	if (r->in_file && !ft_redir_in(r->in_file))
-		return (0);
-	if (r->out_file && !ft_redir_out(r->out_file))
-		return (0);
-	if (r->append_file && !ft_redir_append(r->append_file))
-		return (0);
-	if (r->heredoc_delim && !ft_handle_heredoc(r->heredoc_delim, NULL))
-		return (0);
-	ft_free_redirection(r);
-	return (ft_remove_redirections(cmd, 0, 0));
-}
-
-int	ft_remove_redirections(char ***tokens_ptr, int i, int j)
-{
-	char	**tokens;
-
-	if (!tokens_ptr || !*tokens_ptr)
-		return (0);
-	tokens = *tokens_ptr;
-	while (tokens[i])
-	{
-		if (ft_is_redirection(tokens[i]) && tokens[i + 1])
-		{
-			free(tokens[i]);
-			free(tokens[i + 1]);
-			j = i - 1;
-			while (tokens[++j + 2])
-				tokens[j] = tokens[j + 2];
-			tokens[j] = NULL;
-			tokens[j + 1] = NULL;
-			continue ;
-		}
-		i++;
-	}
-	*tokens_ptr = tokens;
-	return (1);
-}
-
-int	ft_remove_sing_redirections(char **t, int i, int j)
-{
-	if (!t)
-		return (0);
-	i = 0;
-	while (t[i])
-	{
-		if (ft_is_redirection(t[i]) && t[i + 1])
-		{
-			free(t[i]);
-			free(t[i + 1]);
-			j = i;
-			while (t[j + 2])
-			{
-				t[j] = t[j + 2];
-				j++;
-			}
-			t[j] = NULL;
-			t[j + 1] = NULL;
-			continue ;
-		}
-		i++;
-	}
-	return (1);
-}
-
-int	ft_is_redirection(char *str)
-{
-	return (!ft_strcmp(str, "<") || !ft_strcmp(str, ">") || !ft_strcmp(str,
-			">>") || !ft_strcmp(str, "<<"));
-}
-
-void	ft_free_redirection(t_rdr *r)
-{
-	if (r->in_file)
-	{
-		free(r->in_file);
-		r->in_file = NULL;
-	}
-	if (r->out_file)
-	{
-		free(r->out_file);
-		r->out_file = NULL;
-	}
-	if (r->append_file)
-	{
-		free(r->append_file);
-		r->append_file = NULL;
-	}
-	if (r->heredoc_delim)
-	{
-		free(r->heredoc_delim);
-		r->heredoc_delim = NULL;
-	}
-}
-
-int	ft_syntax_error(char *token)
-{
-	char	*mes1;
-	char	*mes2;
-
-	mes1 = "minishell: syntax error near unexpected token `";
-	mes2 = "minishell: syntax error near unexpected token `newline'\n";
-	if (token)
-	{
-		write(2, mes1, ft_strlen(mes1));
-		write(2, token, ft_strlen(token));
-		write(2, "'\n", 2);
-	}
-	else
-		write(2, mes2, ft_strlen(mes2));
-	return (0);
-}
-
-int	ft_check_redir(char **tokens, int i)
-{
-	if (!tokens[i + 1] || ft_is_redirection(tokens[i + 1])
-		|| !ft_strcmp(tokens[i + 1], "|"))
-		return (ft_syntax_error(tokens[i + 1]));
-	return (1);
-}
-
-int	ft_check_pipe(char **tokens, int i)
-{
-	if (i == 0 || !tokens[i + 1] || ft_is_redirection(tokens[i + 1]))
-		return (ft_syntax_error(tokens[i + 1]));
-	return (1);
+	ft_parent_pipe(d, pids, fd, d->tot);
 }
 
 int	ft_validate_syntax(char **tokens)
 {
 	int	i;
 
-	if (!tokens || !tokens[0])
-		return (0);
-	if (ft_is_redirection(tokens[0]))
-		return (0);
 	i = 0;
 	while (tokens[i])
 	{
-		if (ft_is_redirection(tokens[i]))
+		if (ft_strcmp(tokens[i], "|") == 0)
 		{
-			if (!ft_check_redir(tokens, i))
+			if (i == 0 || tokens[i + 1] == NULL || ft_strcmp(tokens[i + 1],
+					"|") == 0)
+			{
+				write(2, "minishell: syntax error near `|'\n", 33);
 				return (0);
+			}
 		}
-		else if (!ft_strcmp(tokens[i], "|"))
+		if (ft_strcmp(tokens[i], ">") == 0)
 		{
-			if (!ft_check_pipe(tokens, i))
+			if (tokens[i + 1] == NULL)
+			{
+				write(2, "minishell: syntax error near `>'\n", 33);
 				return (0);
+			}
 		}
 		i++;
 	}
 	return (1);
 }
 
-char	*ft_strjoin_free(char *s1, char *s2)
+int	ft_validate_segment(char **arr, int st, int end)
 {
-	char	*joined;
+	if (st == end && !ft_strcmp(arr[st], "|"))
+		return (0);
+	return (1);
+}
 
-	if (!s1 || !s2)
+// Rewritten to correctly identify and store redirections
+void	ft_parse_redirection(char **tokens, t_rdr *r)
+{
+	int	i;
+
+	i = 0;
+	r->redirect_in = 0;
+	r->redirect_out = 0;
+	r->heredoc = 0;
+	r->append = 0;
+	r->file_in = NULL;
+	r->file_out = NULL;
+	while (tokens[i])
+	{
+		if (ft_strcmp(tokens[i], "<") == 0)
+		{
+			r->redirect_in = 1;
+			r->file_in = ft_strdup(tokens[i + 1]);
+		}
+		else if (ft_strcmp(tokens[i], "<<") == 0)
+		{
+			r->heredoc = 1;
+			r->file_in = ft_strdup(tokens[i + 1]);
+		}
+		else if (ft_strcmp(tokens[i], ">") == 0)
+		{
+			r->redirect_out = 1;
+			r->file_out = ft_strdup(tokens[i + 1]);
+		}
+		else if (ft_strcmp(tokens[i], ">>") == 0)
+		{
+			r->append = 1;
+			r->file_out = ft_strdup(tokens[i + 1]);
+		}
+		i++;
+	}
+}
+
+// Rewritten `ft_apply_sing_redirections` to handle `>` and `>>`
+int	ft_apply_sing_redirections(t_rdr *r)
+{
+	int	fd_out;
+	int	fd_in;
+
+	if (r->redirect_out)
+	{
+		fd_out = open(r->file_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		if (fd_out < 0)
+		{
+			perror("minishell: redirection error");
+			return (0);
+		}
+		if (dup2(fd_out, STDOUT_FILENO) < 0)
+			perror("dup2");
+		close(fd_out);
+	}
+	if (r->append)
+	{
+		fd_out = open(r->file_out, O_WRONLY | O_CREAT | O_APPEND, 0644);
+		if (fd_out < 0)
+		{
+			perror("minishell: redirection error");
+			return (0);
+		}
+		if (dup2(fd_out, STDOUT_FILENO) < 0)
+			perror("dup2");
+		close(fd_out);
+	}
+	if (r->redirect_in)
+	{
+		fd_in = open(r->file_in, O_RDONLY);
+		if (fd_in < 0)
+		{
+			perror("minishell: redirection error");
+			return (0);
+		}
+		if (dup2(fd_in, STDIN_FILENO) < 0)
+			perror("dup2");
+		close(fd_in);
+	}
+	return (1);
+}
+
+int	ft_apply_redirections(t_rdr *r)
+{
+	int	fd;
+
+	// Input redirection
+	if (r->file_in)
+	{
+		fd = open(r->file_in, O_RDONLY);
+		if (fd < 0)
+			return (perror(r->file_in), 0);
+		if (dup2(fd, STDIN_FILENO) < 0)
+			return (perror("dup2"), close(fd), 0);
+		close(fd);
+	}
+	// Output redirection
+	if (r->file_out)
+	{
+		if (r->append)
+			fd = open(r->file_out, O_WRONLY | O_CREAT | O_APPEND, 0644);
+		else
+			fd = open(r->file_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		if (fd < 0)
+			return (perror(r->file_out), 0);
+		if (dup2(fd, STDOUT_FILENO) < 0)
+			return (perror("dup2"), close(fd), 0);
+		close(fd);
+	}
+	return (1);
+}
+
+void	ft_execute_builtin_with_redir(t_dat *d, t_rdr *r, size_t builtin_idx)
+{
+	int	saved_stdin;
+	int	saved_stdout;
+
+	saved_stdin = -1;
+	saved_stdout = -1;
+	if (r->file_in)
+	{
+		saved_stdin = dup(STDIN_FILENO);
+		ft_apply_redirections(r); // will redirect stdin
+	}
+	if (r->file_out || r->append)
+	{
+		saved_stdout = dup(STDOUT_FILENO);
+		ft_apply_redirections(r); // will redirect stdout
+	}
+	ft_handle_builtin(d, builtin_idx);
+	if (saved_stdin != -1)
+	{
+		dup2(saved_stdin, STDIN_FILENO);
+		close(saved_stdin);
+	}
+	if (saved_stdout != -1)
+	{
+		dup2(saved_stdout, STDOUT_FILENO);
+		close(saved_stdout);
+	}
+}
+
+void	ft_child_exec(t_dat *d, char **cmd)
+{
+	char	*path;
+
+	ft_set_child_signals();
+	path = ft_get_cmd_path(d, cmd[0], 0);
+	if (!path)
+	{
+		ft_cmd_not_found(cmd[0]);
+		exit(127);
+	}
+	execve(path, cmd, d->evs);
+	perror("execve");
+	exit(1);
+}
+
+void	ft_free_args(char **args)
+{
+	int	i;
+
+	i = 0;
+	if (!args)
+		return ;
+	while (args[i])
+	{
+		free(args[i]);
+		i++;
+	}
+	free(args);
+}
+
+char	*ft_expand_exit_status(t_dat *d, char *token)
+{
+	char	*res;
+	int		i;
+
+	i = 0;
+	res = malloc(1);
+	if (!res)
 		return (NULL);
-	joined = ft_strjoin(s1, s2);
-	free(s1);
-	return (joined);
+	res[0] = '\0';
+	while (token[i])
+	{
+		if (token[i] == '$' && token[i + 1] == '?')
+			res = append_exit_status(res, d->last_exit_status, &i);
+		else
+			res = append_char(res, token, &i);
+	}
+	return (res);
 }
 
 char	*append_exit_status(char *res, int status, int *i)
@@ -2352,58 +2275,13 @@ char	*append_char(char *res, char *token, int *i)
 	return (res);
 }
 
-char	*ft_expand_exit_status(t_dat *d, char *token)
+char	*ft_strjoin_free(char *s1, char *s2)
 {
-	char	*res;
-	int		i;
+	char	*joined;
 
-	i = 0;
-	res = malloc(1);
-	if (!res)
+	if (!s1 || !s2)
 		return (NULL);
-	res[0] = '\0';
-	while (token[i])
-	{
-		if (token[i] == '$' && token[i + 1] == '?')
-			res = append_exit_status(res, d->last_exit_status, &i);
-		else
-			res = append_char(res, token, &i);
-	}
-	return (res);
+	joined = ft_strjoin(s1, s2);
+	free(s1);
+	return (joined);
 }
-
-/*
-void	ft_preprocess_tokens(t_dat *data, int len, int i)
-{
-	char	**new_xln;
-
-	if (!data->xln || !data->xln[0])
-		return ;
-	if (ft_is_redirection(data->xln[0]) && !data->xln[1])
-		return ;
-	if (ft_is_redirection(data->xln[0]) || ft_is_redirection(data->xln[1]))
-	{
-		len = 0;
-		while (data->xln[len])
-			len++;
-		new_xln = malloc(sizeof(char *) * (len + 2));
-		if (!new_xln)
-			return ;
-		new_xln[0] = ft_strdup("cat");
-		i = -1;
-		while (++i < len)
-			new_xln[i + 1] = ft_strdup(data->xln[i]);
-		new_xln[len + 1] = NULL;
-		ft_free_string_array(data->xln);
-		data->xln = new_xln;
-	}
-}
-*/
-
-/*
-run with the following command
-cc -Wall -Werror -Wextra -o minishell minishell.c ./libft/libft.a -lreadline
-HA="their $HOME" hu="their $home" GO=slow BALL='balance them $HOME'
-HAD="their $HOME" hug="their $home" GO=slower BALL='balance "as" them $HOME'
-
-*/
