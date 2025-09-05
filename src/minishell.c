@@ -438,7 +438,6 @@ void	ft_set_heredoc_signals(void)
 	sigaction(SIGINT, &sa, NULL);
 	signal(SIGQUIT, SIG_DFL);
 }
-
 int	ft_skip_quote(char *str, int i)
 {
 	char	quote;
@@ -446,11 +445,16 @@ int	ft_skip_quote(char *str, int i)
 	quote = str[i++];
 	while (str[i] && str[i] != quote)
 		i++;
-	if (str[i])
+	if (str[i] == quote) // Found closing quote
 		i++;
+	else
+	{
+		// Unclosed quote! Handle the error
+		ft_putstr_fd("minishell: syntax error: unclosed quote\n", 2);
+		return (-1); // Return error code
+	}
 	return (i);
 }
-
 int	ft_skip_token(char *str, int i)
 {
 	while (str[i] && str[i] != ' ')
@@ -821,7 +825,9 @@ void	ft_strip_quotes_from_xln(t_dat *d)
 	i = 0;
 	while (d->xln[i])
 	{
+		printf("Before stripping: '%s'\n", d->xln[i]); // DEBUG
 		d->xln[i] = strip_quotes(d->xln[i]);
+		printf("After stripping: '%s'\n", d->xln[i]); // DEBUG
 		i++;
 	}
 }
@@ -1699,44 +1705,49 @@ void	ft_get_exit_stat(t_dat *d, pid_t pid)
 	if (WIFEXITED(status))
 		d->last_exit_status = WEXITSTATUS(status);
 }
-
 void	ft_ex_single_cmd(t_dat *d)
 {
 	t_rdr	r;
 	char	**cmd_args;
 	pid_t	pid;
-	int		saved_stdin;
-	int		saved_stdout;
 	char	*cmd_path;
 	int		status;
+	int		saved_stdin;
+	int		saved_stdout;
 
-	// Save original stdin/stdout
-	saved_stdin = dup(STDIN_FILENO);
-	saved_stdout = dup(STDOUT_FILENO);
 	// Parse redirections
 	ft_parse_redirection(d->xln, &r);
-	// Apply redirections (including heredoc)
-	if (!ft_apply_sing_redirections(&r))
-	{
-		ft_free_redirection(&r);
-		close(saved_stdin);
-		close(saved_stdout);
-		return ;
-	}
+	printf("DEBUG: redirect_out=%d, file_out=%s\n", r.redirect_out, r.file_out);
 	// Get clean arguments (without redirection tokens)
 	cmd_args = ft_get_clean_args(d->xln);
+	printf("DEBUG: Clean args: ");
+	for (int k = 0; cmd_args && cmd_args[k]; k++)
+		printf("'%s' ", cmd_args[k]);
+	printf("\n");
 	if (!cmd_args)
 	{
 		ft_free_redirection(&r);
-		dup2(saved_stdout, STDOUT_FILENO);
-		close(saved_stdin);
-		close(saved_stdout);
 		return ;
 	}
 	// Check if the command is a built-in
 	if (ft_handle_builtin(d, 0, cmd_args))
 	{
-		// Built-in was handled, no need to fork
+		// For built-ins, apply redirections in current process
+		saved_stdin = dup(STDIN_FILENO);
+		saved_stdout = dup(STDOUT_FILENO);
+		if (!ft_apply_sing_redirections(&r))
+		{
+			ft_free_redirection(&r);
+			close(saved_stdin);
+			close(saved_stdout);
+			return ;
+		}
+		// Built-in was handled with redirections
+		// Restore stdio
+		dup2(saved_stdin, STDIN_FILENO);
+		dup2(saved_stdout, STDOUT_FILENO);
+		close(saved_stdin);
+		close(saved_stdout);
 	}
 	else
 	{
@@ -1744,13 +1755,16 @@ void	ft_ex_single_cmd(t_dat *d)
 		pid = fork();
 		if (pid < 0)
 		{
-			// Error handling for fork failure
 			perror("minishell: fork");
 			d->last_exit_status = 1;
 		}
 		else if (pid == 0)
 		{
-			// Child process: set signals and execute command
+			// Child process: Apply redirections HERE
+			if (!ft_apply_sing_redirections(&r))
+			{
+				exit(1);
+			}
 			ft_set_child_signals();
 			cmd_path = ft_get_cmd_path(d, cmd_args[0], 0);
 			if (!cmd_path)
@@ -1762,7 +1776,7 @@ void	ft_ex_single_cmd(t_dat *d)
 			execve(cmd_path, cmd_args, d->evs);
 			// If execve returns, an error occurred
 			perror("minishell: execve");
-			exit(127); // Command not found
+			exit(127);
 		}
 		else
 		{
@@ -1774,11 +1788,6 @@ void	ft_ex_single_cmd(t_dat *d)
 	// Cleanup
 	ft_free_redirection(&r);
 	ft_free_args(cmd_args);
-	// Restore original stdio
-	dup2(saved_stdin, STDIN_FILENO);
-	dup2(saved_stdout, STDOUT_FILENO);
-	close(saved_stdin);
-	close(saved_stdout);
 }
 
 int	ft_is_builtin(char *cmd)
@@ -2290,12 +2299,13 @@ void	ft_parse_redirection(char **tokens, t_rdr *r)
 		}
 		else if (ft_strcmp(tokens[i], ">") == 0 && tokens[i + 1])
 		{
-			r->redirect_out = 1;
+			r->redirect_out = 1; // Make sure this is here
 			r->file_out = ft_strdup(tokens[i + 1]);
 			i += 2;
 		}
 		else if (ft_strcmp(tokens[i], ">>") == 0 && tokens[i + 1])
 		{
+			r->redirect_out = 1; // ADD THIS LINE!
 			r->append = 1;
 			r->file_out = ft_strdup(tokens[i + 1]);
 			i += 2;
@@ -2306,14 +2316,14 @@ void	ft_parse_redirection(char **tokens, t_rdr *r)
 		}
 	}
 }
-// Rewritten `ft_apply_sing_redirections` to handle `>` and `>>`
+
 int	ft_apply_sing_redirections(t_rdr *r)
 {
 	int	fd_out;
 	int	fd_in;
 
 	// Handle output redirections first
-	if (r->redirect_out)
+	if (r->redirect_out && !r->append) // Only regular redirect
 	{
 		fd_out = open(r->file_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 		if (fd_out < 0)
@@ -2325,7 +2335,7 @@ int	ft_apply_sing_redirections(t_rdr *r)
 			perror("dup2");
 		close(fd_out);
 	}
-	if (r->append)
+	if (r->append) // Append redirect
 	{
 		fd_out = open(r->file_out, O_WRONLY | O_CREAT | O_APPEND, 0644);
 		if (fd_out < 0)
