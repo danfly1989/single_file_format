@@ -9,7 +9,7 @@ SRC_MINISHELL = \
 OBJ_MINISHELL = $(SRC_MINISHELL:.c=.o)
 
 CC = cc
-CFLAGS = -g -Wall -Wextra -Werror -Iincludes -I$(LIBFT_DIR)
+CFLAGS = -g3 -O0 -Wall -Wextra -Werror -Iincludes -I$(LIBFT_DIR)
 LDFLAGS = -L$(LIBFT_DIR)
 LDLIBS = -lft -lreadline -lhistory
 

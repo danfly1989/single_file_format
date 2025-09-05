@@ -54,8 +54,9 @@ typedef struct s_variable_node
 	char					*name;
 	char					*value;
 	struct s_variable_node	*next;
-}							t_va;
-typedef struct s_redirections
+} t_va; // FIXED: Removed the comment that was breaking this
+
+typedef struct s_rdr
 {
 	int						redirect_in;
 	int						redirect_out;
@@ -63,8 +64,10 @@ typedef struct s_redirections
 	int						append;
 	char					*file_in;
 	char					*file_out;
+	char					*heredoc_delimiter;
 }							t_rdr;
 
+// ... rest of your function declarations remain the same
 void						ft_free_string_array(char **str_array);
 void						ft_increment_shlvl(t_va **env_list);
 int							ft_create_shlvl(t_va **env_list);
@@ -105,8 +108,8 @@ char						*ft_expand_token(char *token, t_dat *data, int qt,
 char						**ft_expand_tokens(t_dat *d, char **tokens,
 								int *qtypes, int i);
 void						ft_strip_surrounding_quotes(char *s);
-void						ft_strip_quotes_after_equal(char *s);
-void						ft_strip_quotes_from_xln(t_dat *d);
+// void						ft_strip_quotes_after_equal(char *s);
+// void						ft_strip_quotes_from_xln(t_dat *d);
 int							ft_valid_var(char *str);
 t_va						*ft_find_var(t_va *list, const char *name);
 int							ft_update_var_value(t_va *node, const char *value);
@@ -125,7 +128,7 @@ void						ft_pwd(void);
 void						ft_update_directories(t_dat *data, char *oldpwd);
 void						ft_cd_error(char *path);
 void						ft_change_directory(t_dat *data, size_t k);
-void						ft_echo(char **arr, size_t k);
+void						ft_echo(t_dat *data, size_t k);
 void						ft_exit_numeric_error(char *arg);
 void						ft_exit(t_dat *data, size_t k);
 void						ft_env(t_dat *data);
@@ -151,7 +154,8 @@ t_va						*ft_duplicate_list(const t_va *head);
 void						ft_print_sorted_env(t_va *head);
 void						ft_export_error(char *arg, char *message);
 void						ft_export_multi_var(t_dat *data, size_t k);
-int							ft_handle_builtin(t_dat *data, size_t k);
+int							ft_handle_builtin(t_dat *data, size_t k,
+								char **args);
 void						ft_check_var_assign_and_expand_line(t_dat *data,
 								char *line);
 int							ft_count_list(t_va *head);
@@ -161,7 +165,7 @@ char						*ft_get_cmd_path(t_dat *d, const char *cmd, int i);
 int							ft_count_pipes(char **tokens);
 void						ft_cmd_not_found(char *cmd);
 void						ft_get_exit_stat(t_dat *d, pid_t pid);
-// void	ft_ex_single_cmd(t_dat *d, char *cmd_path);
+void	ft_ex_single_cmd(t_dat *d); // REMOVED cmd_path parameter
 void						ft_external_functions(t_dat *data, char *line);
 char						**ft_extract_tokens(t_dat *data, int start,
 								int end);
@@ -184,12 +188,6 @@ void						ft_close_pipes(int **fd, int tot);
 void						ft_wait_children(t_dat *d, int tot);
 void						ft_execute_pipeline(t_dat *d, char ***cmd);
 void						ft_parse_redirection(char **tokens, t_rdr *r);
-// int							ft_redir_in(char *file);
-// int							ft_redir_out(char *file);
-// int							ft_redir_append(char *file);
-// int		ft_handle_heredoc(char *delim, char *line);
-// int							ft_apply_sing_redirections(t_rdr *r,char **tok);
-// int							ft_apply_redirections(t_rdr *r, char ***cmd);
 int							ft_remove_redirections(char ***tokens_ptr, int i,
 								int j);
 int							ft_remove_sing_redirections(char **t, int i, int j);
@@ -229,7 +227,6 @@ int							ft_heredoc_parent(int *pipefd, pid_t pid,
 void						ft_heredoc_child(char *delim, char *line,
 								int *pipefd);
 int							ft_handle_heredoc(char *delim, char *line);
-// void						ft_ex_single_cmd(t_dat *d, char *cmd_path);
 int							ft_ex_single_cmd_setup(t_dat *d, t_rdr *r,
 								int *saved_stdin);
 void						ft_ex_single_cmd_parent(t_dat *d, pid_t pid,
@@ -241,8 +238,6 @@ void						ft_free_lines(t_dat *data);
 void						ft_check_var_assign_and_expand_line_ext(t_dat *data,
 								char *line);
 void						ft_cmd_error(t_dat *data, char *line);
-/// @brief ///
-/// @param tokens
 void						ft_remove_redirection_tokens(char **tokens);
 int							ft_redir_in(const char *file);
 int							ft_redir_out(const char *file);
@@ -250,11 +245,20 @@ int							ft_redir_append(const char *file);
 int							ft_apply_sing_redirections(t_rdr *r);
 int							ft_apply_redirections(t_rdr *r);
 void						ft_execute_builtin_with_redir(t_dat *d, t_rdr *r,
-								size_t builtin_idx);
-void						ft_ex_single_cmd(t_dat *d, char *cmd_path);
+								size_t builtin_idx, char **cmd_args);
 void						ft_child_pipe(t_dat *d, char **cmd, int **fd,
 								size_t k);
 char						**ft_get_clean_args(char **xln);
 void						ft_child_exec(t_dat *d, char **cmd);
 void						ft_free_args(char **args);
+
+int							ft_execute_heredoc(t_rdr *r);
+void						ft_read_heredoc_input(char *delimiter,
+								int write_fd);
+void						ft_execute_line(t_dat *data, char *line);
+char						*ft_strip_quotes_after_equal(char *s);
+// in minishell.h
+char						*strip_quotes(char *str);
+void						ft_strip_quotes_from_xln(t_dat *d);
+void						remove_all_quotes(char *s);
 #endif

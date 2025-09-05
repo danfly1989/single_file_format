@@ -17,19 +17,37 @@ int	main(int argc, char *argv[], char *env[])
 	char	*line;
 	t_dat	data;
 
+	// Initialize shell data
 	data = ft_duplicate_input_args(argc, argv, env);
 	ft_set_main_signals();
 	while (1)
 	{
 		line = readline("dandav>");
-		if (line == NULL)
+		if (!line) // EOF (Ctrl-D)
 			break ;
-		if (line && *line && !ft_strisspace(line) && ft_strcmp(line, "<<"))
+		if (*line && !ft_strisspace(line))
 			add_history(line);
-		ft_check_var_assign_and_expand_line(&data, line);
-		if (line)
+		// Tokenize line
+		data.ln = ft_tokenize_line(&data, line, &data.qtypes);
+		if (!data.ln || !data.ln[0])
+		{
 			free(line);
-		line = NULL;
+			continue ;
+		}
+		// Expand variables
+		data.xln = ft_expand_tokens(&data, data.ln, data.qtypes, 0);
+		// Execute builtins or external commands
+		ft_execute_line(&data, line);
+		// This will call ft_handle_builtin or fork+exec
+		// Free per-line memory
+		ft_free_string_array(data.ln);
+		ft_free_string_array(data.xln);
+		if (data.qtypes)
+		{
+			free(data.qtypes);
+			data.qtypes = NULL;
+		}
+		free(line);
 	}
 	ft_cleanup_data(&data);
 	return (0);
@@ -697,48 +715,54 @@ void	ft_strip_surrounding_quotes(char *s)
 	}
 }
 
-void	ft_strip_quotes_after_equal(char *s)
+// Proper quote stripping function
+char	*strip_quotes(char *str)
 {
-	char	*eq;
-	char	quote;
-	size_t	j;
 	size_t	len;
+	char	*result;
 
-	eq = ft_strchr(s, '=');
-	len = ft_strlen(s);
-	if (eq && ((eq[1] == '"' && s[len - 1] != '"') || (eq[1] == '\'' && s[len
-				- 1] != '\'')))
-		return ;
-	if (eq && ((eq[1] == '"' && s[len - 1] == '"') || (eq[1] == '\'' && s[len
-				- 1] == '\'')))
+	if (!str)
+		return (NULL);
+	len = ft_strlen(str);
+	if ((str[0] == '"' && str[len - 1] == '"') || (str[0] == '\'' && str[len
+			- 1] == '\''))
 	{
-		quote = eq[1];
-		j = 0;
-		while (eq[2 + j] && eq[2 + j] != quote)
-		{
-			eq[1 + j] = eq[2 + j];
-			j++;
-		}
-		eq[1 + j] = '\0';
+		result = ft_strndup(str + 1, len - 2);
+		free(str);
+		return (result);
 	}
+	return (str);
 }
 
 void	ft_strip_quotes_from_xln(t_dat *d)
 {
-	size_t	i;
+	int	i;
 
-	i = 0;
 	if (!d || !d->xln)
 		return ;
+	i = 0;
 	while (d->xln[i])
 	{
-		if (d->xln[i])
-		{
-			ft_strip_surrounding_quotes(d->xln[i]);
-			ft_strip_quotes_after_equal(d->xln[i]);
-		}
+		d->xln[i] = strip_quotes(d->xln[i]);
 		i++;
 	}
+}
+
+char	*ft_strip_quotes_after_equal(char *s)
+{
+	char	*eq;
+
+	eq = ft_strchr(s, '=');
+	if (!eq)
+		return (s);
+	eq++; // move past '='
+	if ((*eq == '"' && eq[ft_strlen(eq) - 1] == '"') || (*eq == '\''
+			&& eq[ft_strlen(eq) - 1] == '\''))
+	{
+		eq[ft_strlen(eq) - 1] = '\0';
+		return (eq);
+	}
+	return (eq);
 }
 
 int	ft_valid_var(char *str)
@@ -989,24 +1013,26 @@ void	ft_change_directory(t_dat *data, size_t k)
 		ft_cd_error(path);
 }
 
-void	ft_echo(char **arr, size_t k)
+void	ft_echo(t_dat *data, size_t k)
 {
 	int	i;
 	int	newline;
 
 	i = 1;
 	newline = 1;
-	while (arr[k + i] != NULL && ft_strncmp(arr[k + i], "-n", 2) == 0)
+	// Handle -n flag
+	while (data->xln[k + i] && ft_strncmp(data->xln[k + i], "-n", 2) == 0)
 	{
 		newline = 0;
 		i++;
 	}
-	while (arr[k + i] != NULL)
+	// Print arguments
+	while (data->xln[k + i])
 	{
-		printf("%s", arr[k + i]);
-		i++;
-		if (arr[k + i] != NULL)
+		printf("%s", data->xln[k + i]);
+		if (data->xln[k + i + 1])
 			printf(" ");
+		i++;
 	}
 	if (newline)
 		printf("\n");
@@ -1367,24 +1393,27 @@ void	ft_export_multi_var(t_dat *data, size_t k)
 		i++;
 	}
 }
-
-int	ft_handle_builtin(t_dat *data, size_t k)
+int	ft_handle_builtin(t_dat *data, size_t k, char **args)
 {
-	if (data == NULL || data->xln == NULL)
+	if (data == NULL || args == NULL) // Check 'args' instead of 'data->xln'
 		return (0);
-	if (ft_strcmp(data->xln[k], "pwd") == 0)
+	if (ft_strcmp(args[k], "pwd") == 0) // Use 'args'
 		ft_pwd();
-	else if (ft_strcmp(data->xln[k], "cd") == 0)
+	else if (ft_strcmp(args[k], "cd") == 0) // Use 'args'
 		ft_change_directory(data, k);
-	else if (ft_strcmp(data->xln[k], "echo") == 0)
-		ft_echo(data->xln, k);
-	else if (ft_strcmp(data->xln[k], "exit") == 0)
+	else if (ft_strcmp(args[k], "echo") == 0)
+	{
+		ft_echo(data, k); // Use the new signature
+		return (1);
+	}
+	// Use 'args' here
+	else if (ft_strcmp(args[k], "exit") == 0) // Use 'args'
 		ft_exit(data, k);
-	else if (ft_strcmp(data->xln[k], "env") == 0)
+	else if (ft_strcmp(args[k], "env") == 0) // Use 'args'
 		ft_env(data);
-	else if (ft_strcmp(data->xln[k], "unset") == 0)
+	else if (ft_strcmp(args[k], "unset") == 0) // Use 'args'
 		ft_unset_multi_var(data, k);
-	else if (ft_strcmp(data->xln[k], "export") == 0)
+	else if (ft_strcmp(args[k], "export") == 0) // Use 'args'
 		ft_export_multi_var(data, k);
 	else
 		return (0);
@@ -1557,90 +1586,101 @@ void	ft_get_exit_stat(t_dat *d, pid_t pid)
 	if (WIFEXITED(status))
 		d->last_exit_status = WEXITSTATUS(status);
 }
-
-void	ft_ex_single_cmd(t_dat *d, char *cmd_path)
+void	ft_ex_single_cmd(t_dat *d)
 {
 	t_rdr	r;
 	char	**cmd_args;
 	pid_t	pid;
 	int		saved_stdin;
 	int		saved_stdout;
+	char	*cmd_path;
+	int		status;
 
-	(void)cmd_path;
-	// 1. Save the original stdin and stdout (so we can restore later)
+	// Save original stdin/stdout
 	saved_stdin = dup(STDIN_FILENO);
 	saved_stdout = dup(STDOUT_FILENO);
-	if (saved_stdin < 0 || saved_stdout < 0)
-	{
-		perror("dup");
-		if (saved_stdin >= 0)
-			close(saved_stdin);
-		if (saved_stdout >= 0)
-			close(saved_stdout);
-		return ;
-	}
-	// 2. Parse redirections from the token array into t_rdr
+	// Parse redirections
 	ft_parse_redirection(d->xln, &r);
-	// 3. Apply redirections; stop if any fail
+	// Apply redirections (including heredoc)
 	if (!ft_apply_sing_redirections(&r))
 	{
+		ft_free_redirection(&r);
 		close(saved_stdin);
 		close(saved_stdout);
 		return ;
 	}
-	// 4. Prepare command arguments (without redirection tokens)
+	// Get clean arguments (without redirection tokens)
 	cmd_args = ft_get_clean_args(d->xln);
 	if (!cmd_args)
 	{
-		dup2(saved_stdin, STDIN_FILENO);
+		ft_free_redirection(&r);
 		dup2(saved_stdout, STDOUT_FILENO);
 		close(saved_stdin);
 		close(saved_stdout);
 		return ;
 	}
-	// 5. Check if it's a builtin that should execute in parent
-	if (ft_handle_builtin(d, 0))
+	// --- INSERT THE FOLLOWING CODE BLOCK ---
+	// Check if the command is a built-in
+	if (ft_handle_builtin(d, 0, cmd_args))
 	{
-		// Execute builtin with redirection already applied
-		ft_handle_builtin(d, 0);
-		// Restore stdio
-		dup2(saved_stdin, STDIN_FILENO);
-		dup2(saved_stdout, STDOUT_FILENO);
-		close(saved_stdin);
-		close(saved_stdout);
-		ft_free_args(cmd_args);
-		return ;
-	}
-	// 6. Fork for external commands
-	pid = fork();
-	if (pid < 0)
-	{
-		perror("fork");
-		ft_free_args(cmd_args);
-		dup2(saved_stdin, STDIN_FILENO);
-		dup2(saved_stdout, STDOUT_FILENO);
-		close(saved_stdin);
-		close(saved_stdout);
-		return ;
-	}
-	else if (pid == 0)
-	{
-		// Child process: execute command
-		ft_child_exec(d, cmd_args);
-		exit(EXIT_FAILURE); // exec failed
+		// Built-in was handled, no need to fork.
 	}
 	else
 	{
-		// Parent process: wait for child
-		waitpid(pid, &d->status, 0);
-		// Restore stdio
-		dup2(saved_stdin, STDIN_FILENO);
-		dup2(saved_stdout, STDOUT_FILENO);
-		close(saved_stdin);
-		close(saved_stdout);
+		// It's an external command, so we need to fork and exec
+		pid = fork();
+		if (pid < 0)
+		{
+			// Error handling for fork failure
+			perror("minishell: fork");
+			d->last_exit_status = 1;
+		}
+		else if (pid == 0)
+		{
+			// Child process: set signals and execute command
+			ft_set_child_signals();
+			cmd_path = ft_get_cmd_path(d, cmd_args[0], 0);
+			ft_list_to_env_array(d);
+			execve(cmd_path, cmd_args, d->evs);
+			// If execve returns, an error occurred
+			perror("minishell: execve");
+			exit(127); // Command not found
+		}
+		else
+		{
+			// Parent process: wait for child to finish and get exit status
+			waitpid(pid, &status, 0);
+			ft_get_exit_stat(d, status);
+		}
 	}
-	// 7. Free allocated command arguments
+	// --- END OF NEW CODE BLOCK ---
+	// Cleanup
+	ft_free_redirection(&r);
 	ft_free_args(cmd_args);
+	// Restore original stdio
+	dup2(saved_stdin, STDIN_FILENO);
+	dup2(saved_stdout, STDOUT_FILENO);
+	close(saved_stdin);
+	close(saved_stdout);
+}
+
+int	ft_is_builtin(char *cmd)
+{
+	if (!ft_strcmp(cmd, "pwd"))
+		return (1);
+	if (!ft_strcmp(cmd, "cd"))
+		return (1);
+	if (!ft_strcmp(cmd, "echo"))
+		return (1);
+	if (!ft_strcmp(cmd, "exit"))
+		return (1);
+	if (!ft_strcmp(cmd, "export"))
+		return (1);
+	if (!ft_strcmp(cmd, "unset"))
+		return (1);
+	if (!ft_strcmp(cmd, "env"))
+		return (1);
+	return (0);
 }
 
 // // Rewritten to correctly handle and apply redirections
@@ -1712,10 +1752,17 @@ char	**ft_get_clean_args(char **xln)
 	i = 0;
 	while (xln[i])
 	{
-		if (ft_strcmp(xln[i], ">") != 0 && ft_strcmp(xln[i], "<") != 0
-			&& ft_strcmp(xln[i], ">>") != 0)
+		// Skip redirection tokens and their arguments
+		if (ft_strcmp(xln[i], ">") == 0 || ft_strcmp(xln[i], ">>") == 0
+			|| ft_strcmp(xln[i], "<") == 0 || ft_strcmp(xln[i], "<<") == 0)
+		{
+			i += 2; // Skip both the redirection token and its argument
+		}
+		else
+		{
 			count++;
-		i++;
+			i++;
+		}
 	}
 	clean_args = malloc(sizeof(char *) * (count + 1));
 	if (!clean_args)
@@ -1724,11 +1771,15 @@ char	**ft_get_clean_args(char **xln)
 	j = 0;
 	while (xln[i])
 	{
-		if (ft_strcmp(xln[i], ">") == 0 || ft_strcmp(xln[i], "<") == 0
-			|| ft_strcmp(xln[i], ">>") == 0)
-			i += 2; // Skip redirection token and filename
+		if (ft_strcmp(xln[i], ">") == 0 || ft_strcmp(xln[i], ">>") == 0
+			|| ft_strcmp(xln[i], "<") == 0 || ft_strcmp(xln[i], "<<") == 0)
+		{
+			i += 2; // Skip redirection tokens
+		}
 		else
+		{
 			clean_args[j++] = ft_strdup(xln[i++]);
+		}
 	}
 	clean_args[j] = NULL;
 	return (clean_args);
@@ -1763,7 +1814,7 @@ void	ft_external_functions(t_dat *data, char *line)
 		ft_clean_cmd(cmd);
 	}
 	else
-		ft_ex_single_cmd(data, NULL);
+		ft_ex_single_cmd(data);
 	ft_free_string_array(data->evs);
 	data->evs = NULL;
 }
@@ -1872,7 +1923,7 @@ int	**init_fd_array(int tot)
 	int	**fd;
 	int	i;
 
-	fd = malloc(sizeof(int *) * tot);
+	fd = malloc(sizeof(int *) * (tot + 1));
 	if (!fd)
 		return (NULL);
 	i = 0;
@@ -1929,18 +1980,18 @@ int	ft_is_builtin_in_pipe(char *cmd)
 void	ft_builtin_in_pipe(t_dat *d, char **cmd, int i)
 {
 	if (ft_strcmp(cmd[i], "echo") == 0)
-		ft_echo(cmd, i);
-	if (ft_strcmp(cmd[i], "pwd") == 0)
+		ft_echo(d, i);
+	else if (ft_strcmp(cmd[i], "pwd") == 0)
 		ft_pwd();
-	if (ft_strcmp(cmd[i], "cd") == 0)
+	else if (ft_strcmp(cmd[i], "cd") == 0)
 		ft_change_directory(d, i);
-	if (ft_strcmp(cmd[i], "env") == 0)
+	else if (ft_strcmp(cmd[i], "env") == 0)
 		ft_env(d);
-	if (ft_strcmp(cmd[i], "export") == 0)
+	else if (ft_strcmp(cmd[i], "export") == 0)
 		ft_export_multi_var(d, i);
-	if (ft_strcmp(cmd[i], "unset") == 0)
+	else if (ft_strcmp(cmd[i], "unset") == 0)
 		ft_unset_multi_var(d, i);
-	if (ft_strcmp(cmd[i], "exit") == 0)
+	else if (ft_strcmp(cmd[i], "exit") == 0)
 		ft_exit(d, i);
 	ft_cleanup_data(d);
 	exit(0);
@@ -2058,8 +2109,6 @@ int	ft_validate_segment(char **arr, int st, int end)
 		return (0);
 	return (1);
 }
-
-// Rewritten to correctly identify and store redirections
 void	ft_parse_redirection(char **tokens, t_rdr *r)
 {
 	int	i;
@@ -2071,38 +2120,46 @@ void	ft_parse_redirection(char **tokens, t_rdr *r)
 	r->append = 0;
 	r->file_in = NULL;
 	r->file_out = NULL;
+	r->heredoc_delimiter = NULL; // Add this field to your t_rdr struct
 	while (tokens[i])
 	{
-		if (ft_strcmp(tokens[i], "<") == 0)
+		if (ft_strcmp(tokens[i], "<") == 0 && tokens[i + 1])
 		{
 			r->redirect_in = 1;
 			r->file_in = ft_strdup(tokens[i + 1]);
+			i += 2;
 		}
-		else if (ft_strcmp(tokens[i], "<<") == 0)
+		else if (ft_strcmp(tokens[i], "<<") == 0 && tokens[i + 1])
 		{
 			r->heredoc = 1;
-			r->file_in = ft_strdup(tokens[i + 1]);
+			r->heredoc_delimiter = ft_strdup(tokens[i + 1]); // Store delimiter
+			i += 2;
 		}
-		else if (ft_strcmp(tokens[i], ">") == 0)
+		else if (ft_strcmp(tokens[i], ">") == 0 && tokens[i + 1])
 		{
 			r->redirect_out = 1;
 			r->file_out = ft_strdup(tokens[i + 1]);
+			i += 2;
 		}
-		else if (ft_strcmp(tokens[i], ">>") == 0)
+		else if (ft_strcmp(tokens[i], ">>") == 0 && tokens[i + 1])
 		{
 			r->append = 1;
 			r->file_out = ft_strdup(tokens[i + 1]);
+			i += 2;
 		}
-		i++;
+		else
+		{
+			i++;
+		}
 	}
 }
-
 // Rewritten `ft_apply_sing_redirections` to handle `>` and `>>`
 int	ft_apply_sing_redirections(t_rdr *r)
 {
 	int	fd_out;
 	int	fd_in;
 
+	// Handle output redirections first
 	if (r->redirect_out)
 	{
 		fd_out = open(r->file_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -2127,6 +2184,7 @@ int	ft_apply_sing_redirections(t_rdr *r)
 			perror("dup2");
 		close(fd_out);
 	}
+	// Handle input redirections
 	if (r->redirect_in)
 	{
 		fd_in = open(r->file_in, O_RDONLY);
@@ -2138,6 +2196,12 @@ int	ft_apply_sing_redirections(t_rdr *r)
 		if (dup2(fd_in, STDIN_FILENO) < 0)
 			perror("dup2");
 		close(fd_in);
+	}
+	// Handle heredoc (must be after other input redirections)
+	if (r->heredoc)
+	{
+		if (!ft_execute_heredoc(r))
+			return (0);
 	}
 	return (1);
 }
@@ -2172,7 +2236,8 @@ int	ft_apply_redirections(t_rdr *r)
 	return (1);
 }
 
-void	ft_execute_builtin_with_redir(t_dat *d, t_rdr *r, size_t builtin_idx)
+void	ft_execute_builtin_with_redir(t_dat *d, t_rdr *r, size_t builtin_idx,
+		char **cmd_args)
 {
 	int	saved_stdin;
 	int	saved_stdout;
@@ -2189,7 +2254,7 @@ void	ft_execute_builtin_with_redir(t_dat *d, t_rdr *r, size_t builtin_idx)
 		saved_stdout = dup(STDOUT_FILENO);
 		ft_apply_redirections(r); // will redirect stdout
 	}
-	ft_handle_builtin(d, builtin_idx);
+	ft_handle_builtin(d, builtin_idx, cmd_args);
 	if (saved_stdin != -1)
 	{
 		dup2(saved_stdin, STDIN_FILENO);
@@ -2284,4 +2349,145 @@ char	*ft_strjoin_free(char *s1, char *s2)
 	joined = ft_strjoin(s1, s2);
 	free(s1);
 	return (joined);
+}
+
+int	ft_execute_heredoc(t_rdr *r)
+{
+	int		fd[2];
+	pid_t	pid;
+	int		status;
+
+	if (pipe(fd) == -1)
+	{
+		perror("pipe");
+		return (0);
+	}
+	pid = fork();
+	if (pid == -1)
+	{
+		perror("fork");
+		close(fd[0]);
+		close(fd[1]);
+		return (0);
+	}
+	if (pid == 0)
+	{
+		// Child process: read heredoc input
+		ft_set_heredoc_signals();
+		close(fd[0]); // Close read end
+		ft_read_heredoc_input(r->heredoc_delimiter, fd[1]);
+		close(fd[1]);
+		exit(0);
+	}
+	else
+	{
+		// Parent process
+		close(fd[1]); // Close write end
+		waitpid(pid, &status, 0);
+		if (WIFEXITED(status) && WEXITSTATUS(status) == 130)
+		{
+			close(fd[0]);
+			return (0); // Heredoc interrupted by Ctrl+C
+		}
+		// Redirect stdin to read from the pipe
+		if (dup2(fd[0], STDIN_FILENO) == -1)
+		{
+			perror("dup2");
+			close(fd[0]);
+			return (0);
+		}
+		close(fd[0]);
+		return (1);
+	}
+}
+
+void	ft_read_heredoc_input(char *delimiter, int write_fd)
+{
+	char	*line;
+
+	while (1)
+	{
+		line = readline("> ");
+		if (!line)
+		{
+			write(2,
+				"minishell: warning: here-document delimited by end-of-file\n",
+				56);
+			break ;
+		}
+		if (ft_strcmp(line, delimiter) == 0)
+		{
+			free(line);
+			break ;
+		}
+		write(write_fd, line, ft_strlen(line));
+		write(write_fd, "\n", 1);
+		free(line);
+	}
+}
+
+void	ft_free_redirection(t_rdr *r)
+{
+	if (r->file_in)
+		free(r->file_in);
+	if (r->file_out)
+		free(r->file_out);
+	if (r->heredoc_delimiter)
+		free(r->heredoc_delimiter);
+	r->file_in = NULL;
+	r->file_out = NULL;
+	r->heredoc_delimiter = NULL;
+	r->redirect_in = 0;
+	r->redirect_out = 0;
+	r->heredoc = 0;
+	r->append = 0;
+}
+
+void	ft_execute_line(t_dat *data, char *line)
+{
+	pid_t	pid;
+
+	(void)line;
+	if (!data || !data->xln || !data->xln[0])
+		return ;
+	// Strip quotes BEFORE handling builtins
+	ft_strip_quotes_from_xln(data);
+	if (ft_handle_builtin(data, 0, data->xln))
+		return ;
+	// Otherwise, execute as external command
+	pid = fork();
+	if (pid < 0)
+	{
+		perror("fork");
+		return ;
+	}
+	else if (pid == 0)
+	{
+		// Child process
+		ft_set_no_pipe_child_signals(data); // handle signals properly
+		ft_ex_single_cmd(data);             // execute external command
+		exit(EXIT_FAILURE);                 // fallback exit
+	}
+	else
+	{
+		// Parent process waits for child
+		ft_get_exit_stat(data, pid);
+	}
+}
+
+void	remove_all_quotes(char *s)
+{
+	int	i;
+
+	i = 0;
+	int j = 0; // declare j here
+	if (!s)
+		return ;
+	while (s[i])
+	{
+		if (s[i] != '\'' && s[i] != '"')
+			s[j++] = s[i];
+		i++;
+	}
+	s[j] = '\0';
 }
