@@ -363,7 +363,7 @@ void	ft_child_sigint_handler(int sig)
 	}
 	else if (sig == SIGQUIT)
 	{
-		write(1, "Quit (core dumped)\n", 19);
+		write(1, "Minishell detected SIGQUIT. Core dumped\n", 19);
 	}
 }
 
@@ -395,7 +395,7 @@ void	ft_set_child_signals(void)
 	sigemptyset(&sa.sa_mask);
 	sa.sa_flags = 0;
 	sigaction(SIGINT, &sa, NULL);
-	signal(SIGQUIT, SIG_DFL);
+	signal(SIGQUIT, SIG_ERR);
 }
 
 void	ft_set_main_nested_signals(void)
