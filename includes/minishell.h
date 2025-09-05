@@ -261,4 +261,6 @@ char						*ft_strip_quotes_after_equal(char *s);
 char						*strip_quotes(char *str);
 void						ft_strip_quotes_from_xln(t_dat *d);
 void						remove_all_quotes(char *s);
+int							ft_is_builtin_parent(char *cmd);
+void						ft_echo_pipeline(char **cmd);
 #endif

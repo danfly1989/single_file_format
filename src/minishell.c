@@ -16,6 +16,7 @@ int	main(int argc, char *argv[], char *env[])
 {
 	char	*line;
 	t_dat	data;
+	int		pipe_count;
 
 	// Initialize shell data
 	data = ft_duplicate_input_args(argc, argv, env);
@@ -29,6 +30,10 @@ int	main(int argc, char *argv[], char *env[])
 			add_history(line);
 		// Tokenize line
 		data.ln = ft_tokenize_line(&data, line, &data.qtypes);
+		// DEBUG: Print raw tokens
+		printf("=== RAW TOKENS ===\n");
+		for (int i = 0; data.ln && data.ln[i]; i++)
+			printf("ln[%d] = '%s'\n", i, data.ln[i]);
 		if (!data.ln || !data.ln[0])
 		{
 			free(line);
@@ -36,9 +41,15 @@ int	main(int argc, char *argv[], char *env[])
 		}
 		// Expand variables
 		data.xln = ft_expand_tokens(&data, data.ln, data.qtypes, 0);
+		// DEBUG: Print expanded tokens
+		printf("=== EXPANDED TOKENS ===\n");
+		for (int i = 0; data.xln && data.xln[i]; i++)
+			printf("xln[%d] = '%s'\n", i, data.xln[i]);
+		// DEBUG: Pipe count
+		pipe_count = ft_count_pipes(data.xln);
+		printf("=== PIPE COUNT: %d ===\n", pipe_count);
 		// Execute builtins or external commands
 		ft_execute_line(&data, line);
-		// This will call ft_handle_builtin or fork+exec
 		// Free per-line memory
 		ft_free_string_array(data.ln);
 		ft_free_string_array(data.xln);
@@ -454,22 +465,32 @@ int	ft_skip_token(char *str, int i)
 
 int	ft_count_tokens(char *str)
 {
-	int	i;
 	int	count;
+	int	i;
 
-	i = 0;
 	count = 0;
+	i = 0;
 	while (str[i])
 	{
+		// skip spaces
 		while (str[i] == ' ')
 			i++;
 		if (!str[i])
 			break ;
-		count++;
-		if (str[i] == '\'' || str[i] == '"')
-			i = ft_skip_quote(str, i);
+		// count single-character operators as tokens (pipes, redirects)
+		if (str[i] == '|' || str[i] == '<' || str[i] == '>')
+		{
+			count++;
+			i++;
+		}
 		else
-			i = ft_skip_token(str, i);
+		{
+			// count a normal word token
+			while (str[i] && str[i] != ' ' && str[i] != '|' && str[i] != '<'
+				&& str[i] != '>')
+				i++;
+			count++;
+		}
 	}
 	return (count);
 }
@@ -542,20 +563,77 @@ char	**ft_free_token_quote(char **tokens, int *quote_types)
 char	**ft_tokenize_line(t_dat *d, char *str, int **quote_types_out)
 {
 	char	**tokens;
+	int		tok_count;
 
 	ft_reset_iterators(d);
-	d->k = ft_count_tokens(str);
-	tokens = malloc(sizeof(char *) * (d->k + 1));
-	d->qtypes = malloc(sizeof(int) * (d->k + 1));
+	tok_count = ft_count_tokens(str);
+	tokens = malloc(sizeof(char *) * (tok_count + 1));
+	d->qtypes = malloc(sizeof(int) * (tok_count + 1));
 	if (!tokens || !d->qtypes)
 		return (ft_free_token_quote(tokens, d->qtypes));
 	while (str[d->i])
 	{
+		// skip spaces
 		while (str[d->i] == ' ')
 			d->i++;
 		if (!str[d->i])
 			break ;
+		// Multi-character operators (check these FIRST)
+		if (str[d->i] == '<' && str[d->i + 1] == '<')
+		{
+			tokens[d->j] = ft_strndup(&str[d->i], 2); // "<<"
+			if (!tokens[d->j])
+				return (ft_free_token_quote(tokens, d->qtypes));
+			d->qtypes[d->j] = 0;
+			d->j++;
+			d->i += 2; // Skip both characters
+			continue ;
+		}
+		if (str[d->i] == '>' && str[d->i + 1] == '>')
+		{
+			tokens[d->j] = ft_strndup(&str[d->i], 2); // ">>"
+			if (!tokens[d->j])
+				return (ft_free_token_quote(tokens, d->qtypes));
+			d->qtypes[d->j] = 0;
+			d->j++;
+			d->i += 2; // Skip both characters
+			continue ;
+		}
+		if (str[d->i] == '|' && str[d->i + 1] == '|')
+		{
+			tokens[d->j] = ft_strndup(&str[d->i], 2); // "||"
+			if (!tokens[d->j])
+				return (ft_free_token_quote(tokens, d->qtypes));
+			d->qtypes[d->j] = 0;
+			d->j++;
+			d->i += 2; // Skip both characters
+			continue ;
+		}
+		if (str[d->i] == '&' && str[d->i + 1] == '&')
+		{
+			tokens[d->j] = ft_strndup(&str[d->i], 2); // "&&"
+			if (!tokens[d->j])
+				return (ft_free_token_quote(tokens, d->qtypes));
+			d->qtypes[d->j] = 0;
+			d->j++;
+			d->i += 2; // Skip both characters
+			continue ;
+		}
+		// Single-character operators (check AFTER multi-character)
+		if (str[d->i] == '|' || str[d->i] == '<' || str[d->i] == '>')
+		{
+			tokens[d->j] = ft_strndup(&str[d->i], 1);
+			if (!tokens[d->j])
+				return (ft_free_token_quote(tokens, d->qtypes));
+			d->qtypes[d->j] = 0; // default quote type
+			d->j++;
+			d->i++;
+			continue ;
+		}
+		// normal word token
 		tokens[d->j] = ft_extract_token(str, d, &d->qtypes[d->j]);
+		if (!tokens[d->j])
+			return (ft_free_token_quote(tokens, d->qtypes));
 		d->j++;
 	}
 	tokens[d->j] = NULL;
@@ -1013,6 +1091,30 @@ void	ft_change_directory(t_dat *data, size_t k)
 		ft_cd_error(path);
 }
 
+void	ft_echo_pipeline(char **cmd)
+{
+	int	newline;
+
+	int i = 1; // Start after "echo"
+	newline = 1;
+	// Handle -n flag
+	while (cmd[i] && ft_strncmp(cmd[i], "-n", 2) == 0)
+	{
+		newline = 0;
+		i++;
+	}
+	// Print arguments
+	while (cmd[i])
+	{
+		printf("%s", cmd[i]);
+		if (cmd[i + 1])
+			printf(" ");
+		i++;
+	}
+	if (newline)
+		printf("\n");
+}
+
 void	ft_echo(t_dat *data, size_t k)
 {
 	int	i;
@@ -1402,10 +1504,7 @@ int	ft_handle_builtin(t_dat *data, size_t k, char **args)
 	else if (ft_strcmp(args[k], "cd") == 0) // Use 'args'
 		ft_change_directory(data, k);
 	else if (ft_strcmp(args[k], "echo") == 0)
-	{
 		ft_echo(data, k); // Use the new signature
-		return (1);
-	}
 	// Use 'args' here
 	else if (ft_strcmp(args[k], "exit") == 0) // Use 'args'
 		ft_exit(data, k);
@@ -1436,20 +1535,31 @@ void	ft_check_var_assign_and_expand_line_ext(t_dat *data, char *line)
 	ft_free_string_array(data->xln);
 	data->xln = NULL;
 }
-
 void	ft_check_var_assign_and_expand_line(t_dat *data, char *line)
 {
+	int	pipe_count;
+
 	if (!data || !line)
 		return ;
 	data->qtypes = NULL;
+	// Tokenization
 	data->ln = ft_tokenize_line(data, line, &data->qtypes);
+	// Debug: print raw tokens
+	printf("=== RAW TOKENS ===\n");
+	for (int i = 0; data->ln && data->ln[i]; i++)
+		printf("ln[%d] = '%s'\n", i, data->ln[i]);
 	if (!data->ln)
 	{
 		if (data->qtypes)
 			free(data->qtypes);
 		return ;
 	}
+	// Expansion
 	data->xln = ft_expand_tokens(data, data->ln, data->qtypes, 0);
+	// Debug: print expanded tokens
+	printf("=== EXPANDED TOKENS ===\n");
+	for (int i = 0; data->xln && data->xln[i]; i++)
+		printf("xln[%d] = '%s'\n", i, data->xln[i]);
 	if (!data->xln)
 	{
 		if (data->qtypes)
@@ -1458,6 +1568,9 @@ void	ft_check_var_assign_and_expand_line(t_dat *data, char *line)
 		data->ln = NULL;
 		return ;
 	}
+	// Debug: pipe count
+	pipe_count = ft_count_pipes(data->xln);
+	printf("=== PIPE COUNT: %d ===\n", pipe_count);
 	ft_check_var_assign_and_expand_line_ext(data, line);
 }
 
@@ -1586,6 +1699,7 @@ void	ft_get_exit_stat(t_dat *d, pid_t pid)
 	if (WIFEXITED(status))
 		d->last_exit_status = WEXITSTATUS(status);
 }
+
 void	ft_ex_single_cmd(t_dat *d)
 {
 	t_rdr	r;
@@ -1619,11 +1733,10 @@ void	ft_ex_single_cmd(t_dat *d)
 		close(saved_stdout);
 		return ;
 	}
-	// --- INSERT THE FOLLOWING CODE BLOCK ---
 	// Check if the command is a built-in
 	if (ft_handle_builtin(d, 0, cmd_args))
 	{
-		// Built-in was handled, no need to fork.
+		// Built-in was handled, no need to fork
 	}
 	else
 	{
@@ -1640,6 +1753,11 @@ void	ft_ex_single_cmd(t_dat *d)
 			// Child process: set signals and execute command
 			ft_set_child_signals();
 			cmd_path = ft_get_cmd_path(d, cmd_args[0], 0);
+			if (!cmd_path)
+			{
+				ft_cmd_not_found(cmd_args[0]);
+				exit(127);
+			}
 			ft_list_to_env_array(d);
 			execve(cmd_path, cmd_args, d->evs);
 			// If execve returns, an error occurred
@@ -1653,7 +1771,6 @@ void	ft_ex_single_cmd(t_dat *d)
 			ft_get_exit_stat(d, status);
 		}
 	}
-	// --- END OF NEW CODE BLOCK ---
 	// Cleanup
 	ft_free_redirection(&r);
 	ft_free_args(cmd_args);
@@ -1798,6 +1915,7 @@ void	ft_external_functions(t_dat *data, char *line)
 	char	***cmd;
 	int		n;
 
+	int i, j;
 	(void)line;
 	if (!data || !data->xln || !data->xln[0])
 		return ;
@@ -1810,6 +1928,16 @@ void	ft_external_functions(t_dat *data, char *line)
 		cmd = ft_parse_cmd(data, 0, 0, 0);
 		if (!cmd)
 			return (ft_external_functions(data, line));
+		// --- DEBUG: show how pipeline was parsed ---
+		printf("Pipeline has %d command(s):\n", n + 1);
+		for (i = 0; cmd[i]; i++)
+		{
+			printf("  cmd[%d]:", i);
+			for (j = 0; cmd[i][j]; j++)
+				printf(" '%s'", cmd[i][j]);
+			printf("\n");
+		}
+		// --- END DEBUG ---
 		ft_execute_pipeline(data, cmd);
 		ft_clean_cmd(cmd);
 	}
@@ -1964,9 +2092,16 @@ int	ft_is_builtin_in_pipe(char *cmd)
 		return (1);
 	if (ft_strcmp(cmd, "pwd") == 0)
 		return (1);
-	if (ft_strcmp(cmd, "cd") == 0)
-		return (1);
 	if (ft_strcmp(cmd, "env") == 0)
+		return (1);
+	return (0);
+}
+
+int	ft_is_builtin_parent(char *cmd)
+{
+	if (!cmd)
+		return (0);
+	if (ft_strcmp(cmd, "cd") == 0)
 		return (1);
 	if (ft_strcmp(cmd, "export") == 0)
 		return (1);
@@ -1980,7 +2115,7 @@ int	ft_is_builtin_in_pipe(char *cmd)
 void	ft_builtin_in_pipe(t_dat *d, char **cmd, int i)
 {
 	if (ft_strcmp(cmd[i], "echo") == 0)
-		ft_echo(d, i);
+		ft_echo_pipeline(cmd); // Use parsed cmd array
 	else if (ft_strcmp(cmd[i], "pwd") == 0)
 		ft_pwd();
 	else if (ft_strcmp(cmd[i], "cd") == 0)
@@ -2014,7 +2149,10 @@ void	ft_child_pipe(t_dat *d, char **cmd, int **fd, size_t k)
 	}
 	ft_close_fds(fd, k, d->tot - 1);
 	if (ft_is_builtin_in_pipe(cmd[0]))
-		ft_builtin_in_pipe(d, cmd, 0);
+	{
+		ft_builtin_in_pipe(d, cmd, 0); // run builtin
+		exit(0);                       // terminate child afterwards
+	}
 	path = ft_get_cmd_path(d, cmd[0], 0);
 	if (!path)
 	{
@@ -2041,37 +2179,51 @@ void	ft_parent_pipe(t_dat *d, pid_t *pids, int **fd, int tot)
 	ft_free_fd(fd);
 	free(pids);
 }
-
 void	ft_execute_pipeline(t_dat *d, char ***cmd)
 {
 	int		**fd;
 	pid_t	*pids;
-	size_t	k;
+	int		total_commands;
 
-	fd = init_fd_array(d->tot - 1);
-	pids = malloc(d->tot * sizeof(pid_t));
+	int k; // Change from size_t to int
+	// Calculate the total number of commands
+	total_commands = 0;
+	while (cmd[total_commands])
+		total_commands++;
+	fd = init_fd_array(total_commands - 1);
+	pids = malloc(total_commands * sizeof(pid_t));
 	if (!fd || !pids)
 	{
 		ft_free_fd(fd);
 		free(pids);
 		return ;
 	}
+	// Create pipes
 	k = 0;
-	while (k < d->tot - 1)
+	while (k < total_commands - 1)
 	{
 		if (pipe(fd[k]) == -1)
 			perror("pipe");
 		k++;
 	}
+	// Fork and execute commands
 	k = 0;
-	while (k < d->tot)
+	while (k < total_commands)
 	{
 		pids[k] = fork();
 		if (pids[k] == 0)
+		{
+			// Child process
 			ft_child_pipe(d, cmd[k], fd, k);
+			exit(EXIT_SUCCESS); // Child must exit after execution
+		}
+		else if (pids[k] < 0)
+		{
+			perror("fork");
+		}
 		k++;
 	}
-	ft_parent_pipe(d, pids, fd, d->tot);
+	ft_parent_pipe(d, pids, fd, total_commands);
 }
 
 int	ft_validate_syntax(char **tokens)
@@ -2109,6 +2261,7 @@ int	ft_validate_segment(char **arr, int st, int end)
 		return (0);
 	return (1);
 }
+
 void	ft_parse_redirection(char **tokens, t_rdr *r)
 {
 	int	i;
@@ -2445,34 +2598,39 @@ void	ft_free_redirection(t_rdr *r)
 
 void	ft_execute_line(t_dat *data, char *line)
 {
-	pid_t	pid;
+	char	***cmd;
+	int		pipe_count;
 
 	(void)line;
 	if (!data || !data->xln || !data->xln[0])
 		return ;
 	// Strip quotes BEFORE handling builtins
 	ft_strip_quotes_from_xln(data);
-	if (ft_handle_builtin(data, 0, data->xln))
+	// Check for pipelines first
+	pipe_count = ft_count_pipes(data->xln);
+	printf("DEBUG: Pipe count in execute_line: %d\n", pipe_count);
+	if (pipe_count > 0)
+	{
+		// Handle pipeline execution
+		cmd = ft_parse_cmd(data, 0, 0, 0);
+		printf("DEBUG: ft_parse_cmd returned: %p\n", (void *)cmd);
+		if (!cmd)
+			return ;
+		// Debug: print the parsed commands
+		printf("DEBUG: Parsed commands:\n");
+		for (int i = 0; cmd[i]; i++)
+		{
+			printf("  cmd[%d]:", i);
+			for (int j = 0; cmd[i][j]; j++)
+				printf(" '%s'", cmd[i][j]);
+			printf("\n");
+		}
+		ft_execute_pipeline(data, cmd);
+		ft_clean_cmd(cmd);
 		return ;
-	// Otherwise, execute as external command
-	pid = fork();
-	if (pid < 0)
-	{
-		perror("fork");
-		return ;
 	}
-	else if (pid == 0)
-	{
-		// Child process
-		ft_set_no_pipe_child_signals(data); // handle signals properly
-		ft_ex_single_cmd(data);             // execute external command
-		exit(EXIT_FAILURE);                 // fallback exit
-	}
-	else
-	{
-		// Parent process waits for child
-		ft_get_exit_stat(data, pid);
-	}
+	// Handle single command (with redirections, heredoc, builtins,
+	ft_ex_single_cmd(data);
 }
 
 void	remove_all_quotes(char *s)
