@@ -263,4 +263,6 @@ void						ft_strip_quotes_from_xln(t_dat *d);
 void						remove_all_quotes(char *s);
 int							ft_is_builtin_parent(char *cmd);
 void						ft_echo_pipeline(char **cmd);
+int							ft_is_builtin_in_pipe(char *cmd);
+void						ft_echo_args(char **args, size_t k);
 #endif
